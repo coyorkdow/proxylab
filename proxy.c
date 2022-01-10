@@ -140,6 +140,22 @@ void doit(int client_fd) {
   while ((n = Rio_readlineb(&rio_server, buf, MAXLINE))) {
     Rio_writen(client_fd, buf, n);
   }
+  close(server_fd);
+  close(client_fd);
+}
+
+void *doint_wrap(void *connfd) {
+  doit(*(int *)connfd);
+  free(connfd);
+  return NULL;
+}
+
+void doinnewthread(int connfd) {
+  pthread_t tid;
+  int *fd = malloc(sizeof(int));
+  *fd = connfd;
+  Pthread_create(&tid, NULL, doint_wrap, fd);
+  Pthread_detach(tid);
 }
 
 int main(int argc, char **argv) {
@@ -163,7 +179,8 @@ int main(int argc, char **argv) {
     Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE,
                 0);
     printf("Accepted connection from (%s, %s)\n", hostname, port);
-    doit(connfd);
+    doinnewthread(connfd);
   }
+  close(listenfd);
   return 0;
 }
