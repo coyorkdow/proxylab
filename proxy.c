@@ -1,3 +1,4 @@
+#include "cache.h"
 #include "csapp.h"
 #include "tiny_c_log/log_posix.h"
 #define MAX(a, b) (a) < (b) ? (b) : (a)
@@ -14,11 +15,14 @@ static const char *user_agent_hdr =
 static const char *conn_hdr = "Connection: close\r\n";
 static const char *prox_hdr = "Proxy-Connection: close\r\n";
 
+int listenfd;
+
 /*
  * The URL received by proxy formed like http://www.cmu.edu/hub/index.html
  * parse_uri split the target host, port, and path
  */
-int parse_uri(const char *uri, char **host, char **port, char **path) {
+int parse_uri(const char *uri, const char **host, const char **port,
+              const char **path) {
   *host = strstr(uri, "//");
   if (*host) {
     *host += 2;
@@ -96,7 +100,8 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
  * doit - handle one HTTP request/response transaction
  */
 void doit(int client_fd) {
-  char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+  char buf[MAX_OBJECT_SIZE + MAXLINE];
+  char method[MAXLINE], uri[MAXLINE], version[MAXLINE];
   rio_t rio_client, rio_server;
 
   /* Read request line and headers */
@@ -105,14 +110,23 @@ void doit(int client_fd) {
     return;
   }
   printf("%s", buf);
-  sscanf(buf, "%s %s %s", method, uri, version);  // line:netp:doit:parserequest
-  if (strcasecmp(method, "GET")) {  // line:netp:doit:beginrequesterr
+  sscanf(buf, "%s %s %s", method, uri, version);
+  if (strcasecmp(method, "GET")) {
     clienterror(client_fd, method, "501", "Not Implemented",
                 "Tiny does not implement this method");
     return;
-  }  // line:netp:doit:endrequesterr
+  }
 
-  char *host, *port, *path;
+  char *cache;
+  size_t len;
+  find_cache(uri, &cache, &len);
+  if (cache) {
+    Rio_writen(client_fd, cache, len);
+    close(client_fd);
+    return;
+  }
+
+  const char *host, *port, *path;
   parse_uri(uri, &host, &port, &path);
   LOG_DEBUG("[ptr] host:%p port:%p path:%p [offset] host:%d port:%d path:%d",
             host, port, path, host - uri, port - uri, path - uri);
@@ -137,8 +151,16 @@ void doit(int client_fd) {
   char *end =
       build_requesthdrs(&rio_client, buf + n, host_buf, port ? port_buf : NULL);
   Rio_writen(server_fd, buf, end - buf);  // send client header to real server
-  while ((n = Rio_readlineb(&rio_server, buf, MAXLINE))) {
-    Rio_writen(client_fd, buf, n);
+  len = 0;
+  int offset = 0;
+  while ((n = Rio_readlineb(&rio_server, buf + offset, MAXLINE))) {
+    Rio_writen(client_fd, buf + offset, n);
+    offset += n;
+    len += n;
+    if (offset > MAX_OBJECT_SIZE) offset = 0;
+  }
+  if (len <= MAX_OBJECT_SIZE) {
+    insert_object(uri, buf, len);
   }
   close(server_fd);
   close(client_fd);
@@ -158,8 +180,14 @@ void doinnewthread(int connfd) {
   Pthread_detach(tid);
 }
 
+void proxyexit(int sig) {
+  free_cache();
+  close(listenfd);
+  printf("proxy exit. sig %d", sig);
+}
+
 int main(int argc, char **argv) {
-  int listenfd, connfd;
+  int connfd;
   char hostname[MAXLINE], port[MAXLINE];
   socklen_t clientlen;
   struct sockaddr_storage clientaddr;
@@ -170,6 +198,11 @@ int main(int argc, char **argv) {
     exit(1);
   }
   signal(SIGPIPE, SIG_IGN);
+  signal(SIGABRT, proxyexit);
+  signal(SIGTERM, proxyexit);
+  signal(SIGINT, proxyexit);
+
+  init_cache(MAX_CACHE_SIZE, MAX_OBJECT_SIZE);
 
   listenfd = Open_listenfd(argv[1]);
   while (1) {
@@ -181,6 +214,5 @@ int main(int argc, char **argv) {
     printf("Accepted connection from (%s, %s)\n", hostname, port);
     doinnewthread(connfd);
   }
-  close(listenfd);
   return 0;
 }
