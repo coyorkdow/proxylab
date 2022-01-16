@@ -143,7 +143,7 @@ void doit(int client_fd) {
 
   /* Open a new connection to the target */
   LOG_DEBUG("hostname: %s ; port: %s", host_buf, port ? port_buf : "");
-  int server_fd = Open_clientfd(host_buf, port ? port_buf : NULL);
+  int server_fd = Open_clientfd(host_buf, port ? port_buf : "80");
   LOG_DEBUG("server_fd = %d", server_fd);
   Rio_readinitb(&rio_server, server_fd);
   // fill up the request line, it forms like GET /hub/index.html HTTP/1.0
@@ -183,7 +183,8 @@ void doinnewthread(int connfd) {
 void proxyexit(int sig) {
   free_cache();
   close(listenfd);
-  printf("proxy exit. sig %d", sig);
+  printf("proxy exit. sig %d\n", sig);
+  exit(0);
 }
 
 int main(int argc, char **argv) {
